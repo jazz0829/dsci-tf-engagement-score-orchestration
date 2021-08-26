@@ -1,0 +1,22 @@
+{
+    "inputs": {
+      "slack_message_start_engagement_score_job": {
+        "message": "Started engagement score training job."
+      },
+      "run_get_params_lambda": {
+        "mode" : "predict",
+        "path_domain" : "cig-dev-domain-bucket",
+        "dynamo" : "dsci-cs-bookmark-table",
+        "path_model" : "dd-dsci-contract-prediction-428785023349-eu-west-1"
+      },
+      "slack_message_success_job": {
+        "message": "Training End. Engagement score training job has been completed successfully."
+      },
+      "slack_message_failed_job": {
+        "message": "Training terminated. Engagement score training job has failed."
+      },
+      "slack_message_empty_list": {
+        "message": "Training End. The list is empty."
+      }
+    }
+}

@@ -1,0 +1,161 @@
+{
+    "StartAt": "Start - Notify Slack",
+    "States": {
+        "Start - Notify Slack": {
+            "Type": "Task",
+            "Resource": "${cig-sagemaker-slack-lambda-arn}",
+            "InputPath": "$.inputs.slack_message_start_engagement_score_job",
+            "ResultPath": "$.results.slack_message_start_engagement_score_job",
+            "Next": "Get model to be trained"
+        },
+        "Get model to be trained" :{
+            "Type": "Task",
+            "Resource": "${cig-engagement-score-get-param-lambda-arn}",
+            "InputPath": "$.inputs.run_get_params_lambda",
+            "ResultPath": "$.results.run_get_params_lambda",
+            "Next": "Create EMR Cluster"
+        },
+        "Create EMR Cluster": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::elasticmapreduce:createCluster.sync",
+            "Parameters": {
+                "Name": "dsci-cs-contract-prediction",
+                "LogUri": "s3://dd-dsci-contract-prediction-428785023349-eu-west-1/emr-logs/",
+                "ReleaseLabel": "emr-5.21.0",
+                "Applications": [
+                    {
+                        "Name": "Hadoop"
+                    },
+                    {
+                        "Name": "Spark"
+                    },
+                    {
+                        "Name": "Ganglia"
+                    },
+                    {
+                        "Name": "Livy"
+                    }
+                ],
+                "Instances": {
+                    "InstanceGroups": [
+                        {
+                            "Name": "Master nodes",
+                            "Market": "ON_DEMAND",
+                            "InstanceRole": "MASTER",
+                            "InstanceType": "m5.xlarge",
+                            "InstanceCount": 1
+                    },
+                        {
+                            "Name": "Slave nodes",
+                            "Market": "ON_DEMAND",
+                            "InstanceRole": "CORE",
+                            "InstanceType": "r5d.4xlarge",
+                            "InstanceCount": 3
+                    }
+                    ],
+                    "KeepJobFlowAliveWhenNoSteps": true,
+                    "TerminationProtected": false,
+                    "Ec2SubnetId": "subnet-08fba2cae3fe35f2a"
+                },
+                "Configurations": [
+                    {
+                        "Classification": "spark-defaults",
+                        "Properties": {
+                            "spark.driver.cores": "5",
+                            "spark.driver.memory": "36G",
+                            "spark.executor.cores": "5",
+                            "spark.executor.memory": "36G",
+                            "spark.executor.instances": "8"
+                        }
+                    }
+                ],
+                "BootstrapActions": [
+                    {
+                        "Name": "Install dependency",
+                        "ScriptBootstrapAction": {
+                            "Path": "s3://dd-dsci-contract-prediction-428785023349-eu-west-1/scripts/EMR/install_dependencies.sh"
+                        }
+                    }
+                ],
+                "VisibleToAllUsers": true,
+                "JobFlowRole": "EMR_EC2_DefaultRole",
+                "ServiceRole": "EMR_DefaultRole",
+                "Tags": [
+                    {
+                        "Key": "Project",
+                        "Value": "Contract-Prediction-Orchestration"
+                    }
+                ]
+            },
+            "ResultPath": "$.results.create_emr_cluster",
+            "Next": "Load contract prediction model"
+        },
+        "Load contract prediction model": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+            "Parameters": {
+                "ClusterId.$": "$.results.create_emr_cluster.ClusterId",
+                "Step": {
+                    "Name": "Load_Salesforce_Transformations",
+                    "ActionOnFailure": "TERMINATE_CLUSTER",
+                    "HadoopJarStep": {
+                        "Jar": "command-runner.jar",
+                        "Args": [
+							"spark-submit",
+							"--deploy-mode",
+							"cluster",
+							"--py-files",
+							"s3://dd-dsci-contract-prediction-428785023349-eu-west-1/scripts/EMR/common.zip",
+							"s3://dd-dsci-contract-prediction-428785023349-eu-west-1/scripts/EMR//main.py",
+							"-hc",
+							"churn",
+							"-hm",
+							"train",
+							"-hn",
+							"accounting_established",
+							"-hd",
+							"2019-08-08"
+                        ]
+                    }
+                }
+            },
+            "ResultPath": "$.results.run_engagement_score_emr_cluster",
+            "Next": "Get status of EMR cluster"
+        },
+        "Get status of EMR cluster": {
+          "Type": "Task",
+          "Resource": "${dsci-engagement-score-emr-get-status-lambda-arn}",
+          "InputPath": "$.results.run_engagement_score_emr_cluster",
+          "ResultPath": "$.results.run_engagement_score_emr_cluster_status",
+          "Next": "Is EMR completed?"
+        },
+        "Is EMR completed?" :{
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.results.run_engagement_score_emr_cluster_status.status",
+                    "StringEquals": "TERMINATED",
+                    "Next": "Step function done - Notify Slack"
+                },
+                {
+                    "Variable": "$.results.run_engagement_score_emr_cluster_status.status",
+                    "StringEquals": "TERMINATED_WITH_ERRORS",
+                    "Next": "Step function failed - Notify Slack"
+                }
+            ],
+            "Default": "Step function failed - Notify Slack"
+        },
+        "Step function done - Notify Slack" :{
+            "Type": "Task",
+            "Resource": "${cig-sagemaker-slack-lambda-arn}",
+            "InputPath": "$.inputs.slack_message_success_job",
+            "End": true
+        },
+        "Step function failed - Notify Slack" :{
+            "Type": "Task",
+            "Resource": "${cig-sagemaker-slack-lambda-arn}",
+            "InputPath": "$.inputs.slack_message_failed_job",
+            "End": true
+        }
+    }
+}
